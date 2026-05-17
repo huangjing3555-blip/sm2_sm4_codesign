@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>SM2/SM4 软硬协同动态密钥协商与全密态传输系统</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- ============== 登录页 ============== -->
+<div id="loginPage" class="login-page">
+  <div class="login-card">
+    <div class="login-header">
+      <div class="logo">SM<sup>2</sup>/SM<sup>4</sup></div>
+      <h1>软硬协同安全传输系统</h1>
+      <p class="subtitle">RK3588 AF-ALG 硬件加速 · 国密动态密钥协商</p>
+    </div>
+    <form id="loginForm" class="login-form">
+      <label>登录密码 <span id="loginHint" class="hint"></span></label>
+      <input type="password" id="loginPwd" placeholder="请输入密码" autocomplete="current-password" required>
+      <button type="submit" class="btn-primary">登 录</button>
+      <div id="loginError" class="error-msg"></div>
+    </form>
+    <div class="login-footer">© 2026 软硬协同安全实验室</div>
+  </div>
+</div>
+
+<!-- ============== 主面板 ============== -->
+<div id="dashboard" class="dashboard hidden">
+
+  <header class="topbar">
+    <div class="topbar-left">
+      <span class="brand">SM2/SM4 软硬协同安全传输</span>
+      <span class="badge" id="connBadge">未连接</span>
+    </div>
+    <div class="topbar-right">
+      <span id="userLabel">已登录</span>
+      <button class="btn-secondary" id="btnLogout">登出</button>
+    </div>
+  </header>
+
+  <div class="main-grid">
+
+    <!-- 左：状态 + 控制 -->
+    <section class="panel">
+      <h3>1. 系统状态</h3>
+      <div class="status-grid">
+        <div class="status-item">
+          <span class="lbl">客户端</span>
+          <span class="val" id="selfId">-</span>
+        </div>
+        <div class="status-item">
+          <span class="lbl">服务端</span>
+          <span class="val" id="peerId">-</span>
+        </div>
+        <div class="status-item">
+          <span class="lbl">SM2 握手</span>
+          <span class="val" id="hsState">未协商</span>
+        </div>
+        <div class="status-item">
+          <span class="lbl">当前密钥 ID</span>
+          <span class="val mono" id="keyId">-</span>
+        </div>
+        <div class="status-item">
+          <span class="lbl">协商次数</span>
+          <span class="val" id="rekeyCount">0</span>
+        </div>
+        <div class="status-item">
+          <span class="lbl">硬件后端</span>
+          <span class="val" id="hwBackend">-</span>
+        </div>
+      </div>
+
+      <h3>2. 连接配置</h3>
+      <div class="form-row">
+        <input id="host" placeholder="香橙派 IP, 例如 192.168.1.100" value="192.168.1.100">
+        <input id="port" type="number" value="9000" style="width:100px">
+        <button class="btn-primary" id="btnConnect">连接</button>
+        <button class="btn-secondary" id="btnDisconnect">断开</button>
+      </div>
+
+      <h3>3. SM2 动态密钥协商</h3>
+      <div class="form-row">
+        <button class="btn-primary" id="btnHandshake">发起握手</button>
+        <button class="btn-secondary" id="btnRekey" title="重新协商, 实现一次一密 / 周期换钥">周期换钥</button>
+      </div>
+      <div class="hint-box">
+        前向安全: 每次握手生成全新会话密钥, 长期私钥泄露不影响历史数据。
+      </div>
+
+      <h3>4. 公钥分发</h3>
+      <div class="form-row">
+        <button class="btn-secondary" id="btnShowPub">查看本机公钥</button>
+        <button class="btn-secondary" id="btnImportPeer">导入服务端公钥</button>
+      </div>
+
+      <h3>5. 文件加密传输</h3>
+      <div class="form-row">
+        <input type="file" id="fileInput">
+      </div>
+      <div class="form-row">
+        <label class="radio"><input type="radio" name="backend" value="hw" checked> 服务端硬件解密 (AF_ALG)</label>
+        <label class="radio"><input type="radio" name="backend" value="soft"> 服务端纯软件解密 (Benchmark 对照)</label>
+      </div>
+      <div class="form-row">
+        <button class="btn-primary" id="btnSend">SM4 加密发送</button>
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-bar" id="progBar"></div>
+        <span id="progText">0%</span>
+      </div>
+    </section>
+
+    <!-- 右：图表与日志 -->
+    <section class="panel">
+      <h3>实时性能图表</h3>
+      <div class="chart-wrap">
+        <div id="chartThroughput" class="chart"></div>
+        <div id="chartLatency" class="chart"></div>
+      </div>
+      <div class="chart-wrap">
+        <div id="chartCPU" class="chart"></div>
+        <div id="chartCompare" class="chart"></div>
+      </div>
+    </section>
+
+    <!-- 下方：密文流 + 日志 -->
+    <section class="panel full">
+      <h3>密文流监控 (十六进制实时刷新)</h3>
+      <pre class="hexstream" id="hexStream"></pre>
+    </section>
+
+    <section class="panel full">
+      <div class="row-between">
+        <h3>事件日志</h3>
+        <div>
+          <button class="btn-secondary" id="btnExportCSV">导出性能 CSV</button>
+          <button class="btn-secondary" id="btnClearLog">清空日志</button>
+        </div>
+      </div>
+      <pre class="logbox" id="logBox"></pre>
+    </section>
+
+  </div>
+
+</div>
+
+<!-- 弹窗 -->
+<div class="modal hidden" id="modal">
+  <div class="modal-card">
+    <h3 id="modalTitle">提示</h3>
+    <pre class="mono" id="modalBody"></pre>
+    <div class="modal-actions">
+      <textarea id="modalInput" class="hidden" rows="6" style="width:100%"></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-secondary" id="modalCancel">关闭</button>
+      <button class="btn-primary"   id="modalOK">确定</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
