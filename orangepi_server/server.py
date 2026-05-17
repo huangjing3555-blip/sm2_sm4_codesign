@@ -1,13 +1,3 @@
-"""
-香橙派 5 Plus 服务端
-功能:
-  1. TCP 监听 PC 客户端连接
-  2. 完成 SM2 三轮握手 (软件实现)
-  3. 接收密文, 通过 AF_ALG 硬件后端 (RK3588 Crypto Engine) 解密
-  4. 同时支持软件后端用于 Benchmark 对比
-  5. 实时记录解密时延、CPU 占用、吞吐率到 SQLite
-  6. 支持 CSV 导出
-"""
 import os
 import sys
 import json
@@ -166,18 +156,54 @@ class Session:
         print(f"[+] [{self.addr[0]}:{self.addr[1]}] 握手成功, KeyID={self.key_id}, 耗时 {elapsed:.1f} ms")
         return self.shared_key
 
+    def _resume_handshake(self, obj: dict):
+        """处理已读出 payload 的 MSG_HELLO（serve_files 中收到重握手时调用）"""
+        client_id = obj["id_a"]
+        RA = bytes_to_point(bytes.fromhex(obj["ra"]))
+        t0 = time.time()
+        kex = SM2KeyExchange(
+            role="B", my_id=self.id_self.encode("utf-8"), my_static_priv=self.d_self,
+            my_static_pub=self.P_self, peer_id=client_id.encode("utf-8"),
+            peer_static_pub=self.P_peer, klen=16,
+        )
+        RB = kex.gen_ephemeral()
+        K = kex.compute_shared(RA)
+        msg2 = json.dumps({
+            "id_b": self.id_self,
+            "rb":   point_to_bytes(RB).hex(),
+            "sb":   kex.S1.hex(),
+        }).encode("utf-8")
+        self.sock.sendall(pack_frame(MSG_HELLO_ACK, msg2))
+        mt, payload = read_frame(self.sock)
+        if mt != MSG_HANDSHAKE_DONE:
+            raise RuntimeError(f"重握手失败: 期望 MSG_HANDSHAKE_DONE, 收到 0x{mt:02x}")
+        SA_recv = bytes.fromhex(json.loads(payload.decode("utf-8"))["sa"])
+        if not kex.verify_peer(SA_recv, "SA"):
+            raise RuntimeError("重握手 S_A 校验失败")
+        elapsed = (time.time() - t0) * 1000
+        self.shared_key = K
+        self.key_id = derive_key_id(K)
+        db_log_handshake(f"{self.addr[0]}:{self.addr[1]}", self.key_id, elapsed)
+        print(f"[+] [{self.addr[0]}:{self.addr[1]}] 重握手成功, KeyID={self.key_id}, 耗时 {elapsed:.1f} ms")
+
     def serve_files(self):
         """循环接收文件传输请求"""
+        self.sock.settimeout(None)  # 大文件传输期间不超时
         while True:
             mt, payload = read_frame(self.sock)
             if mt == MSG_FILE_BEGIN:
                 self._recv_one_file(payload)
             elif mt == MSG_REKEY:
-                # 重新协商
                 print(f"[*] 收到重协商请求 from {self.addr}")
                 self.handshake()
+            elif mt == MSG_HELLO:
+                # 客户端重连后重新发起握手（断线重连场景）
+                print(f"[*] 收到重握手请求 from {self.addr}")
+                obj = json.loads(payload.decode("utf-8"))
+                self._resume_handshake(obj)
             else:
-                print(f"[!] 未识别消息类型 0x{mt:02x}")
+                print(f"[!] 未识别消息类型 0x{mt:02x}，跳过")
+                # 不抛异常，继续等待下一帧，提高容错性
 
     def _recv_one_file(self, begin_payload: bytes):
         meta = json.loads(begin_payload.decode("utf-8"))

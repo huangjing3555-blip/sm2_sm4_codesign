@@ -1,11 +1,3 @@
-"""
-PC 客户端 - FastAPI 后端
-功能:
-  1. 提供前端 Dashboard 的 HTTP API (登录、连接、握手、传输、性能查询)
-  2. 与香橙派建立 TCP 长连接, 完成 SM2 协商
-  3. SM4 加密本地文件并发送
-  4. 实时记录性能数据并推送给前端 (WebSocket)
-"""
 import os
 import sys
 import json
@@ -156,7 +148,7 @@ def perf_log(record: dict):
 def do_connect(host: str, port: int):
     """TCP 连接到香橙派"""
     sock = socket.create_connection((host, port), timeout=10)
-    sock.settimeout(60)
+    sock.settimeout(None)  # 不设读超时，大文件传输时等待服务端 ACK 可能需要较长时间
     STATE.tcp_sock = sock
     STATE.peer_addr = f"{host}:{port}"
     STATE.push_event({"type": "log", "msg": f"已连接到 {host}:{port}"})
@@ -238,7 +230,7 @@ def do_handshake():
 
 # ================== 文件加密发送 ==================
 
-CHUNK_SIZE = 64 * 1024   # 64KB 每片
+CHUNK_SIZE = 256 * 1024  # 256KB 每片，减少分片数量，降低协议开销
 
 
 def do_send_file(filepath: str, scenario: str = "hw"):
