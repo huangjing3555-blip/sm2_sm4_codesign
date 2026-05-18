@@ -56,9 +56,9 @@ python app.py
 5. **监控**: 观察右侧 ECharts 图表，对比软硬件解密的吞吐率和 CPU 占用差异。下方会实时滚动十六进制密文流。
 6. **导出**: 演示结束后，点击"导出性能 CSV"，用 Excel 打开生成的 `performance_log.csv` 制作答辩图表。
 
-## 3. 创新点与答辩要点 (加分项)
-
-1. **软硬异构协同**: SM2 握手（计算密集、调用频次低）走软件，SM4 传输（数据密集、吞吐敏感）走 RK3588 硬件引擎，发挥两者最优性能比。
-2. **AF_ALG 直驱内核**: 绕过传统用户态库，通过 Netlink Socket 直接驱动内核硬件单元，实现零拷贝硬件加速。
-3. **前向安全性 (Forward Secrecy)**: 支持"一次一密 / 周期重协商"，单文件单密钥，即使长期私钥泄露，历史通信密文依然无法被破解。
-4. **全链路密态可视化**: 前端实时刷新十六进制密文流、双端 CPU 占用、加解密延迟与吞吐，直观展示"全密态"概念。
+## 3. 项目声明Project Statement
+本项目的作者及单位:
+The author and affiliation of this project:
+- 项目名称(Project Name):HS-CDKN-FETS
+- 项目作者 (Author) : Jing Huang, Donghong Cai
+- 作者单位(Affiliation):暨南大学网络空间安全学院(College of Cyber Security,Jinan University)
