@@ -14,10 +14,14 @@ ALG_SET_OP     = 3
 ALG_OP_DECRYPT = 0
 ALG_OP_ENCRYPT = 1
 
+# Linux 内核 crypto/af_alg.c:  #define ALG_MAX_PAGES 16
+# 单次 recv 的用户缓冲区上限 (pages * PAGE_SIZE)，超过会被 skcipher_recvmsg
+# 内部分批循环，配合 ctx->init 重置逻辑会造成永久阻塞。
+_ALG_MAX_PAGES  = 16
+_PAGE_SIZE      = 4096
+_RECV_CHUNK_MAX = _ALG_MAX_PAGES * _PAGE_SIZE  # 64 KiB
+
 # SM4 ECB 已知答案测试向量 (GB/T 32907-2016 附录 A)
-# key = 0123456789ABCDEFFEDCBA9876543210
-# plaintext  = 0123456789ABCDEFFEDCBA9876543210
-# ciphertext = 681EDF34D206965E86B3E94F536E4246
 _KAT_KEY = bytes.fromhex("0123456789ABCDEFFEDCBA9876543210")
 _KAT_PT  = bytes.fromhex("0123456789ABCDEFFEDCBA9876543210")
 _KAT_CT  = bytes.fromhex("681EDF34D206965E86B3E94F536E4246")
@@ -55,7 +59,27 @@ class AFAlgUnavailable(Exception):
 
 
 def _raw_op(op: int, key: bytes, iv: bytes, data: bytes) -> bytes:
-    """直接调用 AF_ALG，不做任何字节序适配"""
+    """直接调用 AF_ALG，不做任何字节序适配
+
+    实现细节（基于 Linux 5.10 crypto/af_alg.c + crypto/algif_skcipher.c）:
+      1. sndbuf 上限问题: AF_ALG 是"累积式"接口——sendmsg 把数据以页为单位
+         拷贝到 scatterlist (ctx->used 增长), recv 触发解密后 ctx->used 才
+         减少。sendmsg 外层循环检查 af_alg_writable(sk) =
+         (PAGE_SIZE <= sk_sndbuf & PAGE_MASK - ctx->used), 不可写时阻塞在
+         af_alg_wait_for_wmem 永久等待 sndbuf 空间。
+         sk_sndbuf 受 /proc/sys/net/core/wmem_max 默认 212992 (≈ 208KB) 限制,
+         即使 setsockopt(SO_SNDBUF) 也会被 cap. 所以 sendmsg 一次不能超过
+         208KB 左右；超过就需要分块 sendmsg + 立即 recv 交替。
+      2. ctx->init 重置问题: algif_skcipher.c 中 af_alg_pull_tsgl 末尾执行
+         ctx->init = ctx->more. 不带 MSG_MORE 时第二次 _skcipher_recvmsg
+         会因 ctx->init=false 永远阻塞在 af_alg_wait_for_data。我们让最后一块
+         sendmsg 不带 MSG_MORE (more=false), 之前所有块带 MSG_MORE, 保证
+         "中间块 recv 后 ctx->init 仍为 true, 最后一块 recv 后 ctx->init=false
+         但已经拿到全部数据, recv 循环自然退出"。
+      3. recv 单次限制: skcipher_recvmsg 内部是 while(msg_data_left) 循环,
+         每次 _skcipher_recvmsg 都重置 ctx->init. 单次 recv 缓冲区限制在
+         ALG_MAX_PAGES * PAGE_SIZE (64KiB) 以下, 避免触发内层循环。
+    """
     if not IS_LINUX:
         raise AFAlgUnavailable("AF_ALG 仅在 Linux 上可用")
 
@@ -70,19 +94,59 @@ def _raw_op(op: int, key: bytes, iv: bytes, data: bytes) -> bytes:
         op_sock, _ = sock.accept()
         try:
             iv_buf = struct.pack("I", len(iv)) + iv
-            cmsgs = [
+            base_cmsgs = [
                 (SOL_ALG, ALG_SET_OP, struct.pack("I", op)),
                 (SOL_ALG, ALG_SET_IV, iv_buf),
             ]
-            op_sock.sendmsg([data], cmsgs)
+
+            # 每块发送大小: 取 sndbuf 上限减去 16 KiB 余量. sndbuf 由 wmem_max
+            # 默认 212992 限定, 按页对齐后可用 208KB, 减去余量取 192 KiB.
+            # 这样不论内核 sndbuf 默认值还是调大后 (但被 cap) 都安全.
+            BLOCK_SIZE = 192 * 1024
+            if len(data) <= BLOCK_SIZE:
+                # 小于等于单块: 直接一发一收, 不需要 MSG_MORE
+                op_sock.sendmsg([data], base_cmsgs)
+                out = bytearray()
+                remaining = len(data)
+                while remaining > 0:
+                    want = remaining if remaining < _RECV_CHUNK_MAX else _RECV_CHUNK_MAX
+                    got = op_sock.recv(want)
+                    if not got:
+                        break
+                    out.extend(got)
+                    remaining -= len(got)
+                return bytes(out)
+
+            # 多块: 分块 sendmsg + 立即 recv. 最后一块不带 MSG_MORE.
             out = bytearray()
-            remaining = len(data)
-            while remaining > 0:
-                chunk = op_sock.recv(remaining)
-                if not chunk:
-                    break
-                out.extend(chunk)
-                remaining -= len(chunk)
+            offset = 0
+            is_first = True
+            while offset < len(data):
+                chunk = data[offset:offset + BLOCK_SIZE]
+                offset += len(chunk)
+                is_last = (offset >= len(data))
+
+                if is_first:
+                    cmsgs = list(base_cmsgs)
+                    is_first = False
+                else:
+                    cmsgs = []
+
+                flags = 0 if is_last else socket.MSG_MORE
+                op_sock.sendmsg([chunk], cmsgs, flags)
+
+                # 立即 recv 触发解密, 释放 sndbuf 空间
+                recv_need = len(chunk)
+                while recv_need > 0:
+                    want = recv_need if recv_need < _RECV_CHUNK_MAX else _RECV_CHUNK_MAX
+                    got = op_sock.recv(want)
+                    if not got:
+                        raise RuntimeError(
+                            f"AF_ALG recv returned 0, need {recv_need} more bytes"
+                        )
+                    out.extend(got)
+                    recv_need -= len(got)
+
             return bytes(out)
         finally:
             op_sock.close()
@@ -93,18 +157,12 @@ def _raw_op(op: int, key: bytes, iv: bytes, data: bytes) -> bytes:
 def _detect_byteswap() -> bool:
     """
     探测内核 SM4 是否需要字节序适配。
-    用 SM4 ECB 已知答案向量测试：
-      - 若内核结果与标准一致 → 不需要适配
-      - 若内核结果是标准结果的每 4 字节翻转 → 需要适配
-      - 其他情况 → 抛出异常（内核实现不兼容）
     """
-    # ECB 模式: IV 全零, 数据 = 1 块 16 字节
     zero_iv = b"\x00" * 16
     try:
-        # 用 ECB 等效方法: CBC with zero IV, 单块, 不做 PKCS7
         raw = _raw_op(ALG_OP_ENCRYPT, _KAT_KEY, zero_iv, _KAT_PT)
     except AFAlgUnavailable:
-        return False  # 不可用时不需要适配（is_available 会返回 False）
+        return False
 
     if raw == _KAT_CT:
         print("[AF_ALG] 字节序探测: 内核 SM4 与国标一致, 无需适配")
@@ -113,8 +171,6 @@ def _detect_byteswap() -> bool:
         print("[AF_ALG] 字节序探测: 内核 SM4 存在字节序差异, 已启用自动适配")
         return True
     else:
-        # 可能是 CBC 模式下 IV 影响了结果，尝试另一种探测方式
-        # 用全零明文 + 全零 IV，比较软件实现
         try:
             from . import sm4_soft
             pt_zero = b"\x00" * 16
@@ -161,7 +217,6 @@ def _do_op(op: int, key: bytes, iv: bytes, data: bytes) -> bytes:
     """带字节序适配的 AF_ALG 操作"""
     _ensure_detected()
     if _BYTESWAP_NEEDED:
-        # 加密前对明文做字节序翻转，加密后再翻转回来，使结果与软件一致
         data_in = _byteswap32(data)
         raw = _raw_op(op, key, iv, data_in)
         return _byteswap32(raw)

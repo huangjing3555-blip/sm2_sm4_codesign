@@ -1,1 +1,5 @@
 timestamp,scenario,backend,file_name,file_size,send_ms,decrypt_ms,throughput_mbps,pc_cpu_percent,key_id
+2026-06-13 16:54:16,soft,soft,upload_截图.png,151833,1956.38,1258.78,0.62,34.1,7D49D06A3969F21F
+2026-06-13 16:54:51,hw,hw,upload_截图.png,151833,699.51,41.32,1.74,86.6,7D49D06A3969F21F
+2026-06-13 16:56:44,soft,soft,upload_论文计算机安全文献.docx,12047,424.35,140.17,0.23,11.1,7D49D06A3969F21F
+2026-06-13 16:56:53,hw,hw,upload_论文计算机安全文献.docx,12047,73.47,2.65,1.31,80.1,7D49D06A3969F21F
