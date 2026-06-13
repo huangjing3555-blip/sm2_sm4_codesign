@@ -3,6 +3,7 @@
 帧结构: Magic(2) + Type(1) + Length(4, big-endian) + Payload(N)
 """
 import struct
+import asyncio
 
 MAGIC = b"\xAA\x55"
 
@@ -46,4 +47,21 @@ def read_frame(sock):
     if length > 64 * 1024 * 1024:
         raise ValueError(f"Payload 过大: {length}")
     payload = recv_exact(sock, length) if length > 0 else b""
+    return msg_type, payload
+async def async_recv_exact(reader: asyncio.StreamReader, n: int) -> bytes:
+    """从 asyncio.StreamReader 精确读取 n 字节 (非阻塞)"""
+    buf = bytearray()
+    while len(buf) < n:
+        chunk = await reader.read(n - len(buf))
+        if not chunk:
+            raise ConnectionError("Socket closed prematurely")
+        buf.extend(chunk)
+    return bytes(buf)
+async def async_read_frame(reader: asyncio.StreamReader):
+    """从 asyncio.StreamReader 异步读取并解析一个协议帧"""
+    header = await async_recv_exact(reader, 7)
+    if header[:2] != MAGIC:
+        raise ValueError("非法协议魔法值(Magic)")
+    msg_type, length = struct.unpack(">BI", header[2:])
+    payload = await async_recv_exact(reader, length)
     return msg_type, payload

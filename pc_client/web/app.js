@@ -162,7 +162,7 @@ function pushPerf(rec) {
   histLat.push(rec.decrypt_ms || 0); if (histLat.length > 30) histLat.shift();
   histCpuC.push(rec.pc_cpu_percent || 0); if (histCpuC.length > 30) histCpuC.shift();
   // 服务端 CPU 透传可在 record 中扩展, 这里同步一下 ack 返回里包含的字段
-  histCpuS.push(rec.server_cpu || 0); if (histCpuS.length > 30) histCpuS.shift();
+  histCpuS.push(rec.server_cpu || rec.cpu_percent || 0); if (histCpuS.length > 30) histCpuS.shift();
 
   CHARTS.thr.setOption({xAxis:{data:histLabels}, series:[{data:histThr}]});
   CHARTS.lat.setOption({xAxis:{data:histLabels}, series:[{data:histLat}]});
@@ -198,6 +198,7 @@ function connectWS() {
 }
 
 function handleEvent(ev) {
+  if (ev.type === 'ping') return;
   switch(ev.type) {
     case 'snapshot':
       applyStatus(ev.status); break;
