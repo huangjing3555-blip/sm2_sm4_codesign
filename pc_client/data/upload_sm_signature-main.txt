@@ -1,0 +1,78 @@
+sm_signature-main/
+│
+├── 根配置
+│   ├── package.json                                 依赖与脚本（pnpm）
+│   ├── pnpm-lock.yaml                            依赖锁
+│   ├── tsconfig.json              		     TypeScript 配置
+│   ├── vite.config.ts                                  Vite 构建配置
+│   ├── drizzle.config.ts                             Drizzle ORM 配置
+│   ├── components.json           		     shadcn/ui 组件元信息
+│   ├── .env.example             		     环境变量模板
+│
+├── server/                                                 后端（Node + Express + tRPC）
+│   ├──  _core/index.ts                               服务启动入口
+│   ├──  _core/context.ts                            tRPC 上下文
+│   ├── _core/trpc.ts                                   tRPC 初始化、publicProcedure/protectedProcedure
+│   ├── _core/cookies.ts                             Cookie 选项工具
+│   ├── _core/env.ts                                    ENV 聚合
+│   ├── _core/vite.ts                                    dev 模式 Vite 中间件、prod 静态服务
+│   ├── auth-local.ts                                   本地认证
+│   ├── gmssl-wrapper.ts                           密码套件封装
+│   ├── routers.ts                                        tRPC 根路由
+│   ├── routers/auth.ts                               认证 tRPC：login/register/logout/me
+│   ├── routers/crypto.ts                            加密 tRPC：生成/哈希/签名/验签
+│   ├── crypto-db.ts                                    加解密相关表的 CRUD
+│   ├── db.ts                                                Drizzle 连接 + users 表 upsert/getByOpenId
+│   ├── storage.ts                                        S3 兼容存储上传/下载封装
+│   ├── benchmark.ts                                  性能基准
+│   └── performance.ts                               PerformanceCounter 类
+│
+├── client/                                                   前端
+│   ├── index.html                                       HTML 入口
+│   ├── public/                                             静态资源
+│   │
+│   └── src/
+│       ├── main.tsx                                      React 入口
+│       ├── App.tsx                                       根组件
+│       ├── index.css / sketch-theme.css    全局样式
+│       ├── const.ts                                       共享常量 
+│       │
+│       ├── _core/hooks/
+│       │   └── useAuth.ts                             认证 hook
+│       │
+│       ├── contexts/ThemeContext.tsx      主题切换
+│       ├── hooks/useComposition.ts          IME 组合输入 hook
+│       ├── hooks/useMobile.tsx                 移动端断点判断
+│       ├── hooks/usePersistFn.ts               ref 持久化函数
+│       │
+│       ├── lib/trpc.ts                                  tRPC React 客户端
+│       ├── lib/utils.ts                                 cn() 工具
+│       │
+│       ├── components/
+│       │   ├── CryptoDashboard.tsx         加密功能面板
+│       │   ├── DashboardLayout.tsx         带侧边栏的布局
+│       │   ├── DashboardLayoutSkeleton.tsx 加载骨架
+│       │   ├── ErrorBoundary.tsx               React 错误边界
+│       │   └── ui/                                        shadcn/ui 组件库
+│       │
+│       └── pages/                                       路由页面
+│           ├── Login.tsx                               登录页
+│           ├── Dashboard.tsx                      首页
+│           ├── KeyGeneration.tsx               SM2 密钥生成/列表/下载/删除
+│           ├── SM3Hash.tsx                        SM3 哈希
+│           ├── SignMessage.tsx                 SM2 签名
+│           ├── VerifySignature.tsx              SM2 验签
+│           ├── OperationHistory.tsx           历史记录
+│           └── NotFound.tsx                       404 页
+│
+├── shared/                                             前后端共享
+│   ├── const.ts                                       COOKIE_NAME / ONE_YEAR_MS / 错误消息
+│   ├── _core/errors.ts                            HttpError + 工厂函数
+│   └── types.ts                                       类型 re-export
+│
+├── drizzle/                                             数据库
+│   ├── schema.ts                                  表结构
+│   ├── 0000_lying_shiva.sql                 首次迁移
+│   ├── 0001_far_meltdown.sql            二次迁移
+│   ├── meta/                                        迁移快照
+│   └── migrations/.gitkeep

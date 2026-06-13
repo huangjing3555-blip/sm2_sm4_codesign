@@ -22,6 +22,9 @@ _PAGE_SIZE      = 4096
 _RECV_CHUNK_MAX = _ALG_MAX_PAGES * _PAGE_SIZE  # 64 KiB
 
 # SM4 ECB 已知答案测试向量 (GB/T 32907-2016 附录 A)
+# key = 0123456789ABCDEFFEDCBA9876543210
+# plaintext  = 0123456789ABCDEFFEDCBA9876543210
+# ciphertext = 681EDF34D206965E86B3E94F536E4246
 _KAT_KEY = bytes.fromhex("0123456789ABCDEFFEDCBA9876543210")
 _KAT_PT  = bytes.fromhex("0123456789ABCDEFFEDCBA9876543210")
 _KAT_CT  = bytes.fromhex("681EDF34D206965E86B3E94F536E4246")
@@ -67,7 +70,7 @@ def _raw_op(op: int, key: bytes, iv: bytes, data: bytes) -> bytes:
          减少。sendmsg 外层循环检查 af_alg_writable(sk) =
          (PAGE_SIZE <= sk_sndbuf & PAGE_MASK - ctx->used), 不可写时阻塞在
          af_alg_wait_for_wmem 永久等待 sndbuf 空间。
-         sk_sndbuf 受 /proc/sys/net/core/wmem_max 默认 212992 (≈ 208KB) 限制,
+         sk_sndbuf 在受 /proc/sys/net/core/wmem_max 默认 212992 (≈ 208KB) 限制,
          即使 setsockopt(SO_SNDBUF) 也会被 cap. 所以 sendmsg 一次不能超过
          208KB 左右；超过就需要分块 sendmsg + 立即 recv 交替。
       2. ctx->init 重置问题: algif_skcipher.c 中 af_alg_pull_tsgl 末尾执行
@@ -157,12 +160,18 @@ def _raw_op(op: int, key: bytes, iv: bytes, data: bytes) -> bytes:
 def _detect_byteswap() -> bool:
     """
     探测内核 SM4 是否需要字节序适配。
+    用 SM4 ECB 已知答案向量测试：
+      - 若内核结果与标准一致 → 不需要适配
+      - 若内核结果是标准结果的每 4 字节翻转 → 需要适配
+      - 其他情况 → 抛出异常（内核实现不兼容）
     """
+    # ECB 模式: IV 全零, 数据 = 1 块 16 字节
     zero_iv = b"\x00" * 16
     try:
+        # 用 ECB 等效方法: CBC with zero IV, 单块, 不做 PKCS7
         raw = _raw_op(ALG_OP_ENCRYPT, _KAT_KEY, zero_iv, _KAT_PT)
     except AFAlgUnavailable:
-        return False
+        return False  # 不可用时不需要适配（is_available 会返回 False）
 
     if raw == _KAT_CT:
         print("[AF_ALG] 字节序探测: 内核 SM4 与国标一致, 无需适配")
@@ -171,6 +180,8 @@ def _detect_byteswap() -> bool:
         print("[AF_ALG] 字节序探测: 内核 SM4 存在字节序差异, 已启用自动适配")
         return True
     else:
+        # 可能是 CBC 模式下 IV 影响了结果，尝试另一种探测方式
+        # 用全零明文 + 全零 IV，比较软件实现
         try:
             from . import sm4_soft
             pt_zero = b"\x00" * 16
@@ -217,6 +228,7 @@ def _do_op(op: int, key: bytes, iv: bytes, data: bytes) -> bytes:
     """带字节序适配的 AF_ALG 操作"""
     _ensure_detected()
     if _BYTESWAP_NEEDED:
+        # 加密前对明文做字节序翻转，加密后再翻转回来，使结果与软件一致
         data_in = _byteswap32(data)
         raw = _raw_op(op, key, iv, data_in)
         return _byteswap32(raw)
